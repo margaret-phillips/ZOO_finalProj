@@ -6,6 +6,8 @@ library(tidyr)
 library(tidyverse)
 library(lubridate)
 
+##--------------- downloading data from USGS ---------------------------####
+
 # Vector of USGS site numbers (8–15 digits). Example sites:
 site_numbers <- c("04067500", "04087000", "04085200", "04087000", "040871475",
                   "040871476", "04063700", "04087234", "04101500", "04108660",
@@ -34,6 +36,8 @@ ggplot(dv, aes(Date, daily_temp, color = site_no)) +
        color = "USGS site") +
   theme_minimal()
 
+##----- pull in csv files donwloaded from PRISM website for air temp-------####
+
 #pull in air temp data for sites w long-term data from PRISM
 #need to skip merged metadata in first 10 rows in order for columns to show up
 at_04063700<- read.csv("04063700_airtemp.csv", skip=10)
@@ -41,11 +45,13 @@ at_04101500<- read.csv("04101500_airtemp.csv", skip= 10)
 at_040637500<- read.csv("040637500_airtemp.csv", skip= 10)
 at_04108660<- read.csv("04108660_airtemp.csv", skip=10)
 
+
+##---------- wrangling and organizing data ----------------------------####
 #next, subset the dfs by month and combine to make airtemp= x, stream=y
 #also convert water temp to deg F
-#add interaction for summer and winter
+#add interaction for drainage area
 #questions I would like to ask: is relationship linear?
-# does season matter (it should)? anything in the data to indicate there is another variable(s) to use?
+# does drainage area matter (it should)? anything in the data to indicate there is another variable(s) to use?
 
 dv<- dv %>% 
   mutate(water_temp_f= daily_temp * (9/5) +32) #converted to deg F
@@ -80,7 +86,8 @@ df_combined <- dv_at_wt %>%
 df_combined<- df_combined %>% 
   rename(tw= water_temp_f, t_air= tmean..degrees.F.)
 
-###### THIS IS WHEN IT GETS GOOD
+
+##-- adding interaction and visualizing data from 3 sites with 10 yr record-----####
 
 analysis_3_df <- df_combined %>%
   filter(site_no %in% c("04063700", "04101500", "04108660")) %>%
@@ -131,10 +138,63 @@ summary(lm_int)
 lm_simple3<- lm(tw ~ t_air, data= analysis_3_df)
 summary (lm_simple3)
 
-#assumption checking:
-autoplot(lm_simple3)
+##----------------assumption checking:-----------------------------####
 
-#AIC table
+autoplot(lm_simple3)
+hist(lm_simple$residuals)
+
+# residuals are normally distributed--better than I expected!
+
+# scale-location has a slight trend, but nothing to indicate that residuals change a bunch
+# depending on fitted values. heteroscedasticity assumption seems okay!
+
+# residuals vs. fitted seems okay too--no apparent trends, so relationship seems linear
+
+# residuals vs. leverage also seems okay. Most points have very low leverage
+
+# I am concerned about the possibility of colinearity, so I'm doing a more detailed check
+#that I found online, jut to make sure!
+
+#################################################check for colinearity: 
+
+#Main-effects ANCOVA (parallel slopes assumption)
+m_main <- lm(tw ~ t_air + drainage_area, data = analysis_3_df)
+
+#Interaction ANCOVA (different slopes by land_use)
+m_int <- lm(tw ~ t_air * drainage_area, data = analysis_3_df)
+summary(m_int)
+
+#now looking at the model matrix
+
+X_int <- model.matrix(m_int)
+colnames(X_int)
+# Examine correlations among numeric columns of the model matrix (excluding intercept)
+cor_mat <- cor(X_int[, -1])
+round(cor_mat, 2)
+
+#there actually are not large r values between t_air and t_air:drainagearea,
+#so I think I'm okay to proceed to the more detailed check
+
+#install.packages("car")
+library(car)
+
+v_main <- vif(m_main)
+v_int  <- vif(m_int)
+
+v_main
+v_int
+
+# Adjusted GVIF for factor (land_use) in the interaction model
+df_attr <- attr(v_int, "df")  # df for multi-df terms (factors)
+adj_gvif <- if (!is.null(df_attr)) v_int^(1/(2*df_attr)) else NULL
+
+adj_gvif
+
+#my GVIF is high for the model with interaction, but that is natural with categorical predictors, 
+#so I will just "interpret cautiously"
+
+
+##---------- additional analysis: AIC table ------------------------####
 
 # Put models in a named list for convenience
 lm_intercept3<- lm(tw ~ 1, data=analysis_3_df)
