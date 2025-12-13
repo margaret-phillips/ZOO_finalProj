@@ -105,8 +105,8 @@ analysis_3_df <- df_combined %>%
   select(site_no, Date, t_air, tw) %>%
   mutate(
     drainage_area = case_when(
-      site_no == "04108660"                      ~ "large",
-      site_no %in% c("04101500", "04124000")     ~ "small",
+      site_no == "04101500"                      ~ "large",
+      site_no %in% c("04121944", "04124000")     ~ "small",
       TRUE                                       ~ "medium"
     )
   )
@@ -141,7 +141,7 @@ analysis_3_df <- analysis_3_df %>%
 
 # Different slopes for each factor separately
 lm_interaction3 <- lm(tw ~ t_air * drainage_area, data = analysis_3_df)
-summary(lm_int)
+summary(lm_interaction3)
 
 #run simple linear model
 lm_simple3<- lm(tw ~ t_air, data= analysis_3_df)
@@ -170,9 +170,9 @@ ggplot(mean_temp_df, mapping= aes(x = year, y = mean_temp, color = site_no, grou
 
 # make a map!
 ##----------------assumption checking:-----------------------------####
-
+library(ggfortify)
 autoplot(lm_simple3)
-hist(lm_simple$residuals)
+hist(lm_simple3$residuals)
 
 # residuals are normally distributed--better than I expected!
 
