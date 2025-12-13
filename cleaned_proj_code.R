@@ -8,16 +8,13 @@ library(lubridate)
 
 ##--------------- downloading data from USGS ---------------------------####
 
-# Vector of USGS site numbers (8–15 digits). Example sites:
-site_numbers <- c("04067500", "04087000", "04085200", "04087000", "040871475",
-                  "040871476", "04063700", "04087234", "04101500", "04108660",
-                  "04118564"
-)  # replace with your gages
+# Vector of USGS site numbers:
+site_numbers <- c("04101500", "04108660", "04121660", "04121944", "04124000", "04137020")
 
 start_date <- "2015-01-01"
 end_date   <- "2025-12-03"
 
-# Pull daily water temperature (°C) for multiple sites
+# Pull daily water temperature (°C) for all sites
 dv_raw <- readNWISdv(
   siteNumbers = site_numbers,
   parameterCd = c("00010", "00020"),  # water temperature
@@ -40,10 +37,12 @@ ggplot(dv, aes(Date, daily_temp, color = site_no)) +
 
 #pull in air temp data for sites w long-term data from PRISM
 #need to skip merged metadata in first 10 rows in order for columns to show up
-at_04063700<- read.csv("04063700_airtemp.csv", skip=10)
-at_04101500<- read.csv("04101500_airtemp.csv", skip= 10)
-at_040637500<- read.csv("040637500_airtemp.csv", skip= 10)
-at_04108660<- read.csv("04108660_airtemp.csv", skip=10)
+at_04121660<- read.csv("at_04121660.csv", skip=10)
+at_04101500<- read.csv("at_04101500.csv", skip= 10)
+at_04121944<- read.csv("at_04121944.csv", skip= 10)
+at_04108660<- read.csv("at_04108660.csv", skip=10)
+at_04124000<- read.csv("at_04124000.csv", skip=10)
+at_04137020<- read.csv("at_04137020.csv", skip=10)
 
 
 ##---------- wrangling and organizing data ----------------------------####
@@ -61,17 +60,26 @@ dv<- dv %>%
 dv$month <- format(dv$Date, "%m")
 
 dv_at_wt<- dv %>% 
-  #filter(month== "07" | month== "01") %>% 
-  select(site_no, Date, daily_temp, water_temp_f, month) %>% 
-  filter(site_no== "04063700" | site_no== "040637500" | site_no== "04101500" | site_no== "04108660")
+  select(site_no, Date, daily_temp, water_temp_f, month) 
+  #filter(site_no== "04063700" | site_no== "040637500" | site_no== "04101500" | site_no== "04108660")
 
+  ##FIX THIS UP FOR NEW SITE NOs and download data from PRISM
 #now site_no column for easy df combining
-at_04063700$site_no<- "04063700"
-at_040637500$site_no<- "040637500"
-at_04101500$site_no<- "04101500" #agricultural
-at_04108660$site_no<- "04108660"
-df_all_at<- rbind(at_04063700, at_040637500, at_04101500, at_04108660)
+at_04121660$site_no<- "04121660" # 1,834 mi²
+at_04101500$site_no<- "04101500" #3,666 mi²
+at_04121944$site_no<- "04121944" #agricultural, 345 square miles
+at_04108660$site_no<- "04108660" #1,950 square miles
+at_04124000$site_no<- "04124000" # 857 mi²
+at_04137020$site_no<- "04137020" #1,689 mi²
+df_all_at<- rbind(at_04121660, at_04101500, at_04121944, at_04108660, at_04124000, at_04137020)
 
+## date is in format d/m/yyyy
+#first formatting the column as a date just in case
+#df_all_at$Date <- as.Date(df_all_at$Date, format = "%m/%d/%Y")
+#now changing format to yyy-mm-dd to match nwis data 
+df_all_at$Date <- as.Date(df_all_at$Date, format = "%m/%d/%Y")
+
+## air temp not showing up for 1500 and 8660 (issue with date prob)
 
 df_all_at <- df_all_at %>%
   mutate(
@@ -89,22 +97,20 @@ df_combined<- df_combined %>%
 
 ##-- adding interaction and visualizing data from 3 sites with 10 yr record-----####
 
+##### fix this up to add drainage area class for each new MI site
+
 analysis_3_df <- df_combined %>%
-  filter(site_no %in% c("04063700", "04101500", "04108660")) %>%
+  #filter(site_no %in% c("04063700", "04101500", "04108660")) %>%
   filter(month == "07") %>%
   select(site_no, Date, t_air, tw) %>%
   mutate(
-    land_use = case_when(
-      site_no == "04063700" ~ "forested",
-      site_no == "04108660" ~ "mixed",        # last site gets "mixed"
-      TRUE                  ~ "agricultural"  # everything else
-    ),
     drainage_area = case_when(
-      site_no == "04101500" ~ "large",
-      site_no == "04063700"     ~ "small",
-      TRUE ~ "medium"
+      site_no == "04108660"                      ~ "large",
+      site_no %in% c("04101500", "04124000")     ~ "small",
+      TRUE                                       ~ "medium"
     )
   )
+
 
 
 #now plot to visualize
@@ -118,6 +124,9 @@ ggplot(analysis_3_df, mapping= aes(x = t_air, y = tw, color = drainage_area, gro
     title = "Water temperature vs. Air temperature by watershed drainage size"
   ) +
   theme_minimal()
+
+
+############ WORKING UP TIL HERE ##############################################
 
 
 #make sure drainage area and land_use are factors
@@ -138,6 +147,28 @@ summary(lm_int)
 lm_simple3<- lm(tw ~ t_air, data= analysis_3_df)
 summary (lm_simple3)
 
+# plot the mean of July temp over 10 yrs at each site to see if there is a trend
+analysis_3_df$year <- format(analysis_3_df$Date, "%Y")
+
+#new smaller df with means per site and year
+mean_temp_df<- analysis_3_df %>% 
+  group_by(site_no, year) %>% 
+  summarize(mean_temp= mean(tw), .groups= "drop")
+
+
+#now plot to visualize
+ggplot(mean_temp_df, mapping= aes(x = year, y = mean_temp, color = site_no, group = site_no)) +
+  geom_point() +
+  geom_smooth() +
+  labs(
+    x = "Year",
+    y = "Mean July Water temperature (F)",
+    color = "Site",
+    title = "Mean July Water temperature (F) from 2015-2025"
+  ) +
+  theme_minimal()
+
+# make a map!
 ##----------------assumption checking:-----------------------------####
 
 autoplot(lm_simple3)
@@ -228,3 +259,56 @@ aic_table <- aic_table[order(aic_table$AIC), ]
 print(aic_table)
 
 ## kalamazoo: 5,200 sq km, poppler: 360km2, st. joeseph's: 12,000 km2
+
+
+##---------------------- making a site map ---------------------------------####
+
+## get rid of title and make a caption instead!!
+
+library(sf)
+#install.packages("tigris")
+library(tigris)    # US Census TIGER/Line
+library(ggplot2)
+
+#loading in MI site coords
+mi_coords<- readxl::read_excel("mi_sites.xlsx", 
+                               col_types = c("text", "numeric", "numeric")  # adjust order to match your sheet: Site_ID, Latitude, Longitude
+)
+
+#csv of site lat/longs
+sf_coords<- data.frame(mi_coords) #sf obj conversion didn't work til I made this a df
+
+#need to make coords df into a sf obj for mapping
+sf_coords<- st_as_sf(mi_coords, 
+                     coords= c("Longitude", #long NEEDS to come first!
+                               "Latitude"),
+                     crs= 4326) #this is for WGS84 for lat/long
+
+GL<- st_read("Great_Lakes.shp")
+
+options(tigris_use_cache = TRUE)
+
+# 1) Get Michigan state polygon (cb = TRUE gives generalized boundary; set FALSE for full detail)
+mi <- states(cb = TRUE, year = 2022) |>
+  st_as_sf() |>
+  st_transform(4326) |>
+  dplyr::filter(STUSPS == "MI")
+
+# 2) (Optional) Dissolve multiparts and extract exterior boundary only
+mi_boundary <- st_cast(st_union(mi), "MULTILINESTRING")
+
+# 3) Plot over your layer
+ggplot() +
+  geom_sf(data = GL, fill = "grey80", color = "grey40", linewidth = 0.6) +
+  geom_sf(data = mi_boundary, color = "black", linewidth = 0.9) +
+  theme_minimal()
+
+#### new version adding site points
+
+ggplot() +
+  geom_sf(data = GL, fill = "grey80", color = "grey40", linewidth = 0.6) +
+  geom_sf(data = sf_coords, aes(color = Site_ID), size = 3) +
+  scale_color_brewer(palette = "Set1") +
+  labs(color = "Site ID",
+       title = "Michigan Stream Temperature Sites") +
+  theme_classic()
