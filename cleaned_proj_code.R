@@ -1,10 +1,20 @@
+# Maggie Philllips
+# ZOO 800 final project
 
-#install.packages("dataRetrieval")
-library(dataRetrieval)
-library(dplyr)
-library(tidyr)
+#long list of libraries used in code below!!
+library(dataRetrieval) #package for pulling USGS data from NWIS
 library(tidyverse)
-library(lubridate)
+library(lubridate) #dealing with dates
+library(broom)
+library(purrr)
+library(ggfortify) #assumption checking
+library(car)
+library(emmeans) 
+library(sf) #dealing with geospatial data and mapping
+library(tigris) #get geospatial data    
+library(ggtext) #help formatting figure captions
+library(viridisLite) #colorblind friendly color palettes 
+library(lmtest) #for ratio test in ANCOVA
 
 ##--------------- downloading data from USGS ---------------------------####
 
@@ -50,7 +60,7 @@ at_04137020<- read.csv("at_04137020.csv", skip=10)
 #also convert water temp to deg F
 #add interaction for drainage area
 #questions I would like to ask: is relationship linear?
-# does drainage area matter (it should)? anything in the data to indicate there is another variable(s) to use?
+# does drainage area matter (it should)?
 
 dv<- dv %>% 
   mutate(water_temp_f= daily_temp * (9/5) +32) #converted to deg F
@@ -67,7 +77,7 @@ dv_at_wt<- dv %>%
 #now site_no column for easy df combining
 at_04121660$site_no<- "04121660" # 1,834 mi²
 at_04101500$site_no<- "04101500" #3,666 mi²
-at_04121944$site_no<- "04121944" #agricultural, 345 square miles
+at_04121944$site_no<- "04121944" #345 square miles
 at_04108660$site_no<- "04108660" #1,950 square miles
 at_04124000$site_no<- "04124000" # 857 mi²
 at_04137020$site_no<- "04137020" #1,689 mi²
@@ -95,12 +105,9 @@ df_combined<- df_combined %>%
   rename(tw= water_temp_f, t_air= tmean..degrees.F.)
 
 
-##-- adding interaction and visualizing data from 3 sites with 10 yr record-----####
-
-##### fix this up to add drainage area class for each new MI site
+##-- adding interaction and visualizing data from 6 sites with 10 yr record-----####
 
 analysis_3_df <- df_combined %>%
-  #filter(site_no %in% c("04063700", "04101500", "04108660")) %>%
   filter(month == "07") %>%
   select(site_no, Date, t_air, tw) %>%
   mutate(
@@ -111,33 +118,44 @@ analysis_3_df <- df_combined %>%
     )
   )
 
-
-
 #now plot to visualize
 ggplot(analysis_3_df, mapping= aes(x = t_air, y = tw, color = drainage_area, group = drainage_area)) +
   geom_point() +
   geom_smooth() +
+  scale_color_viridis_d() +
   labs(
     x = "Air temperature (F)",
     y = "Water temperature (F)",
-    color = "Drainage Area",
-    title = "Water temperature vs. Air temperature by watershed drainage size"
+    color = "Drainage Area"
   ) +
-  theme_minimal()
-
-
-############ WORKING UP TIL HERE ##############################################
+  labs(
+    color = "Drainage Area",
+    caption = "<span style='line-height:0.9'><b>Figure 3.</b> Mean July daily stream temperature (F) vs. mean daily air temperature<br>at Michigan streamgages with different drainage areas from 2015 through 2025.</span>"
+  )+
+  theme_classic()+ 
+  theme(
+    plot.caption = element_markdown( #using markdown so that I can more easily bold "figure 1" and format caption
+      size= 12, #caption text size
+      hjust= 0, #justify left
+    ),
+    legend.title = element_text(size = 10), #increasing legend title and text size
+    legend.text = element_text(size = 10),
+    panel.grid = element_blank(),
+    legend.position = c(0.045, 1),  # bottom left corner (tweak as needed)
+    legend.justification = c(0, 1),  # anchor legend to bottom-left corner  
+    axis.title = element_blank() #getting rid of axis title
+  )
 
 
 #make sure drainage area and land_use are factors
 analysis_3_df <- analysis_3_df %>%
   mutate(drainage_area= factor(drainage_area,
                                levels= c("small", "medium", "large")))
-# choose your baseline
+# choose your baseline level (optional)
 
 # Fit ANCOVA with interaction (tests homogeneity of slopes)
 
-# Full factorial with t_air: includes 2-way & 3-way interactions
+# Full factorial with t_air: includes 2-way and 3-way interactions
 
 # Different slopes for each factor separately
 lm_interaction3 <- lm(tw ~ t_air * drainage_area, data = analysis_3_df)
@@ -160,17 +178,60 @@ mean_temp_df<- analysis_3_df %>%
 ggplot(mean_temp_df, mapping= aes(x = year, y = mean_temp, color = site_no, group = site_no)) +
   geom_point() +
   geom_smooth() +
+  scale_color_viridis_d() + #colorblind friendly palette
+  scale_y_continuous(
+    expand = expansion(mult = c(0, 0.05), add = c(0, 2.9))  #adding room at the top of plot for legend
+  )+
   labs(
-    x = "Year",
-    y = "Mean July Water temperature (F)",
-    color = "Site",
-    title = "Mean July Water temperature (F) from 2015-2025"
-  ) +
-  theme_minimal()
+    color = "Site ID",
+    caption = "<span style='line-height:0.9'><b>Figure 2.</b> Mean July stream temperature (F) at Michigan streamgages from years<br>2015 through 2025.</span>"
+  )+
+  theme_classic()+ 
+  theme(
+    plot.caption = element_markdown( #using markdown so that I can more easily bold "figure 1" and format caption
+      size= 12, #caption text size
+      hjust= 0, #justify left
+    ),
+    legend.title = element_text(size = 10), #increasing legend title and text size
+    legend.text = element_text(size = 10),
+    panel.grid = element_blank(),
+    legend.position = c(0.045, 1),  #top left corner
+    legend.justification = c(0, 1),  # anchor legend  
+    axis.title = element_blank() #getting rid of axis title
+  )
 
-# make a map!
+
+#####---------linear regression, conf intervals, p values for sites over the decade----####
+
+trend_tbl <- mean_temp_df %>%
+  mutate(year = as.integer(year)) %>%                 # make sure year is numeric
+  filter(!is.na(year), !is.na(mean_temp)) %>%         #get rid of any missing/NA data
+  group_by(site_no) %>%
+  filter(n_distinct(year) >= 3) %>%                   # need ≥3 distinct years for CI
+  group_split() %>%
+  map_df(function(df_site) { #I got this code to make a tibble of change per decade, conf interval, and p values from copilot
+    # fit
+    m <- lm(mean_temp ~ year, data = df_site)
+    # tidy with CI; if CI fails, catch and return without CI
+    td <- tryCatch(
+      broom::tidy(m, conf.int = TRUE),
+      error = function(e) broom::tidy(m) %>% mutate(conf.low = NA_real_, conf.high = NA_real_)
+    )
+    td %>%
+      filter(term == "year") %>%
+      transmute(
+        site_no  = df_site$site_no[1],
+        change_per_decade = estimate * 10,
+        lower_decade      = conf.low * 10,
+        upper_decade      = conf.high * 10,
+        p.value
+      )
+  })
+
+trend_tbl
+
 ##----------------assumption checking:-----------------------------####
-library(ggfortify)
+
 autoplot(lm_simple3)
 hist(lm_simple3$residuals)
 
@@ -184,14 +245,14 @@ hist(lm_simple3$residuals)
 # residuals vs. leverage also seems okay. Most points have very low leverage
 
 # I am concerned about the possibility of colinearity, so I'm doing a more detailed check
-#that I found online, jut to make sure!
+#that I found online, just to make sure!
 
-#################################################check for colinearity: 
+#####---------------------check for colinearity:---------------------------#### 
 
 #Main-effects ANCOVA (parallel slopes assumption)
 m_main <- lm(tw ~ t_air + drainage_area, data = analysis_3_df)
 
-#Interaction ANCOVA (different slopes by land_use)
+#Interaction ANCOVA (different slopes by drainage_area)
 m_int <- lm(tw ~ t_air * drainage_area, data = analysis_3_df)
 summary(m_int)
 
@@ -206,8 +267,7 @@ round(cor_mat, 2)
 #there actually are not large r values between t_air and t_air:drainagearea,
 #so I think I'm okay to proceed to the more detailed check
 
-#install.packages("car")
-library(car)
+## more detailed check below using car package:
 
 v_main <- vif(m_main)
 v_int  <- vif(m_int)
@@ -215,7 +275,7 @@ v_int  <- vif(m_int)
 v_main
 v_int
 
-# Adjusted GVIF for factor (land_use) in the interaction model
+# Adjusted GVIF for factor (drainage area) in the interaction model
 df_attr <- attr(v_int, "df")  # df for multi-df terms (factors)
 adj_gvif <- if (!is.null(df_attr)) v_int^(1/(2*df_attr)) else NULL
 
@@ -223,7 +283,6 @@ adj_gvif
 
 #my GVIF is high for the model with interaction, but that is natural with categorical predictors, 
 #so I will just "interpret cautiously"
-
 
 ##---------- additional analysis: AIC table ------------------------####
 
@@ -235,22 +294,22 @@ models <- list(
   air_only    = lm_intercept3
 )
 
-# Compute AIC for each model
+#calculate AIC for each model
 aic_vals <- sapply(models, AIC)
 
-# ΔAIC relative to the best (lowest AIC)
+# delta AIC relative to the best (lowest AIC)
 delta_aic <- aic_vals - min(aic_vals)
 
-# Akaike weights
-#akaike_weights <- exp(-0.5 * delta_aic)
-#akaike_weights <- akaike_weights / sum(akaike_weights)
+# Akaike weights (closer to 1 is better)
+akaike_weights <- exp(-0.5 * delta_aic)
+akaike_weights <- akaike_weights / sum(akaike_weights)
 
-# Compose a table
+#make the table!
 aic_table <- data.frame(
   model = names(models),
   AIC = aic_vals,
   deltaAIC = delta_aic,
-  #weight = akaike_weights,
+  weight = akaike_weights,
   row.names = NULL
 )
 
@@ -258,17 +317,31 @@ aic_table <- data.frame(
 aic_table <- aic_table[order(aic_table$AIC), ]
 print(aic_table)
 
-## kalamazoo: 5,200 sq km, poppler: 360km2, st. joeseph's: 12,000 km2
+#making sure that model with interaction is significantly better than model without
+ratio_test<- lmtest::lrtest(lm_simple3, lm_interaction3)
+print(ratio_test)
 
+## testing slope differences ##############################################
+
+m <- lm(tw ~ t_air * drainage_area, data = analysis_3_df)
+b <- coef(m)
+
+slope_small  <- b["t_air"]
+slope_medium <- b["t_air"] + b["t_air:drainage_areamedium"]
+slope_large  <- b["t_air"] + b["t_air:drainage_arealarge"]
+
+intercept_small  <- b["(Intercept)"]
+intercept_medium <- b["(Intercept)"] + b["drainage_areamedium"]
+intercept_large  <- b["(Intercept)"] + b["drainage_arealarge"]
+
+emtr <- emtrends(m, ~ drainage_area, var = "t_air")
+pairs(emtr)  # pairwise slope contrasts and p-values
+summary(emtr)  # slope estimates per class with SE and CI
+
+## slopes differ, but are not statistically different at the 95% confidence interval
+## would need more sites with a range in drainage area to untangle this effect!
 
 ##---------------------- making a site map ---------------------------------####
-
-## get rid of title and make a caption instead!!
-
-library(sf)
-#install.packages("tigris")
-library(tigris)    # US Census TIGER/Line
-library(ggplot2)
 
 #loading in MI site coords
 mi_coords<- readxl::read_excel("mi_sites.xlsx", 
@@ -284,31 +357,49 @@ sf_coords<- st_as_sf(mi_coords,
                                "Latitude"),
                      crs= 4326) #this is for WGS84 for lat/long
 
-GL<- st_read("Great_Lakes.shp")
+GL<- st_read("Great_Lakes.shp") #downloaded from MI DNR arcgis website
 
 options(tigris_use_cache = TRUE)
 
-# 1) Get Michigan state polygon (cb = TRUE gives generalized boundary; set FALSE for full detail)
+#getting Michigan state polygon (cb = TRUE gives generalized boundary; set FALSE for full detail)
 mi <- states(cb = TRUE, year = 2022) |>
   st_as_sf() |>
   st_transform(4326) |>
   dplyr::filter(STUSPS == "MI")
 
-# 2) (Optional) Dissolve multiparts and extract exterior boundary only
+#dissolve multiparts and extract exterior boundary only
 mi_boundary <- st_cast(st_union(mi), "MULTILINESTRING")
 
-# 3) Plot over your layer
+#Plotting over my Great Lakes shapefile so you can see both
 ggplot() +
   geom_sf(data = GL, fill = "grey80", color = "grey40", linewidth = 0.6) +
   geom_sf(data = mi_boundary, color = "black", linewidth = 0.9) +
   theme_minimal()
 
-#### new version adding site points
+#### new map version adding site points
 
 ggplot() +
   geom_sf(data = GL, fill = "grey80", color = "grey40", linewidth = 0.6) +
   geom_sf(data = sf_coords, aes(color = Site_ID), size = 3) +
-  scale_color_brewer(palette = "Set1") +
-  labs(color = "Site ID",
-       title = "Michigan Stream Temperature Sites") +
+  scale_color_viridis_d() +
+  #using markdown syntax to insert line breaks, control line height, and bold the figure caption
+  labs(
+    color= "Site ID",
+    caption = "<span style='line-height:0.9'><b>Figure 1.</b> Selection of Michigan USGS streamgages with 10 or more years<br>of daily stream temperature data.</span>"
+  )+
+  theme_minimal()+ 
+  theme(
+    plot.caption = element_markdown( #using markdown so that I can more easily bold "figure 1" and format caption
+      size= 12, #caption text size
+      hjust= 0, #justify left
+    ),
+    legend.title = element_text(size = 12), #increasing legend title and text size
+    legend.text = element_text(size = 12),
+    panel.grid = element_blank(),
+    legend.position = c(0, 0.025),  # bottom left corner (tweak as needed)
+    legend.justification = c(0, 0),  # anchor legend to bottom-left corner  
+    axis.text = element_blank(), #googled this. getting rid of gridlines and lat/long   
+    axis.ticks = element_blank(),  #getting rid of tick marks         
+    axis.title = element_blank() #getting rid of axis title
+  )
   theme_classic()
